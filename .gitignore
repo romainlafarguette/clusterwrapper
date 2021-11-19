@@ -1,0 +1,5 @@
+# Git ignore file, Romain Lafarguette, https://github.com/romainlafarguette 
+
+# Ignore some folders
+__pycache__/
+
