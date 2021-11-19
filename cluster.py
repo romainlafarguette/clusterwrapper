@@ -2,7 +2,7 @@
 """
 Wrapper Class to Cluster Data and to Generate Output
 Romain Lafarguette, https://romainlafarguette.github.io/
-Time-stamp: "2021-11-10 14:43:26 RLafarguette"
+Time-stamp: "2021-11-19 13:16:36 RLafarguette"
 """
 ###############################################################################
 #%% Modules
@@ -10,6 +10,8 @@ Time-stamp: "2021-11-10 14:43:26 RLafarguette"
 # Base
 import pandas as pd
 import numpy as np
+import random
+import string
 
 # Functional imports
 from dataclasses import dataclass, field
@@ -81,7 +83,6 @@ def unscale_wd(df, mean_d, std_d):
         duscale[var] = (df[var]*std_d[var]) + mean_d[var]
     return(duscale)
 
-
 def lab_reo(labels_l):    
     """ Reorder labels by frequency and add 1"""    
     cd = Counter(labels_l) # Frequency
@@ -113,7 +114,11 @@ def plot_dendrogram(model, **kwargs):
     dendrogram(linkage_matrix, **kwargs)
 
     return(None)
-    
+
+def random_text(length=6):
+    x = ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+    return(x)
+
 ###############################################################################
 # Cluster: Master class
 ###############################################################################
@@ -131,10 +136,12 @@ class Cluster: # Define the master cluster class
         self.mean_d = {v: np.mean(self.df[v]) for v in self.features_l}
         self.std_d = {v: np.std(self.df[v]) for v in self.features_l}
         self.x = scale_wd(df=self.dfg,
-                          mean_d=self.mean_d, std_d=self.std_d).values 
+                          mean_d=self.mean_d, std_d=self.std_d).values
         self.pca_fit = PCA(n_components=2).fit(self.x) # PCA Fit
         self.dpca = pd.DataFrame(scale(self.pca_fit.transform(self.x)),
-                                 columns=['first_comp', 'second_comp'])       
+                                 columns=['first_comp', 'second_comp'],
+                                 index=self.dfg.index)
+
         # Unit tests
         self.__cluster_unit_test__() # UnitTests defined below
         
@@ -159,7 +166,10 @@ class Cluster: # Define the master cluster class
                         orientation='right', ax=ax)
         if axvline:
             ax.axvline(x=axvline, color='tab:red', ls='--')
-        
+            
+        labels_l = [list(self.dfg.index)[int(idx.get_text())]
+                    for idx in ax.get_yticklabels()]
+        ax.set_yticklabels(labels_l)
         ax.set_xlabel('Ward metric', fontsize='small', labelpad=20)
         ax.set_ylabel('Individuals ID', fontsize='small', labelpad=20)
         ax.set_title('Hierarchical Clustering Dendogram', y=1.02)
@@ -237,8 +247,7 @@ class ClusterFit:
         # Create a new dataframe with the labels : scaled
         dfr_x = pd.DataFrame(self.x)        
         dfr_x.columns = self.features_l
-        dfr_x.insert(0, 'cluster_label', labels) # Add the column first
-                
+        dfr_x.insert(0, 'cluster_label', labels) # Add the column first    
         return((dfr, dfr_x))
        
     def __features_labels__(self, stat='mean'): # Summarize features by label
@@ -266,8 +275,7 @@ class ClusterFit:
         I also recompute them on uncentered variables via unscaling
         """
                 
-        # Scaled
-        
+        # Scaled        
         centroids = NearestCentroid().fit(self.x, self.labels).centroids_
         dc = pd.DataFrame(centroids, columns=self.features_l).copy()
         
@@ -509,7 +517,6 @@ class ClusterFitPlot:
         ax.tick_params(axis='both', labelsize='small')
                 
         return(ax) # Return the whole figure
-
     
     def all_features_by_cluster(self, stat='mean', ncols=3):
         # Retrieve the summary statistics
@@ -603,8 +610,13 @@ class ClusterFitPlot:
             fmarker = marker_l[idx]
             if style=='centroids':
                 # Points
-                ax.scatter(dpl['first_comp'], dpl['second_comp'],
-                           color=fcolor, marker=fmarker, s=75)
+                ax.scatter(dpl['first_comp'], dpl['second_comp'], s=0)
+                for x, y, txt in zip(dpl['first_comp'], dpl['second_comp'],
+                                     dpl.index):
+                    ax.text(x, y, txt, fontsize='x-small', color=fcolor)
+                
+                # ax.scatter(dpl['first_comp'], dpl['second_comp'],
+                #            color=fcolor, marker=fmarker, s=75)
                 # Centroids
                 ax.scatter(dcl['first_comp'], dcl['second_comp'],
                            c=fcolor, marker='X', s=125)
@@ -618,10 +630,11 @@ class ClusterFitPlot:
                     ax.plot([val_x, c_x], [val_y, c_y], c=fcolor, alpha=0.8)
                     
             elif style=='labels':
-                ax.scatter(dpl['first_comp'], dpl['second_comp'],
-                           color=fcolor, marker=fmarker,
-                           s=100, alpha=0.85)
-                
+                ax.scatter(dpl['first_comp'], dpl['second_comp'], s=0)
+                for x, y, txt in zip(dpl['first_comp'], dpl['second_comp'],
+                                     dpl.index):
+                    ax.text(x, y, txt, fontsize='x-small', color=fcolor)
+
                 # Cluster number
                 ax.scatter(dcl['first_comp'], dcl['second_comp'],
                            c='black', marker='$%d$' % lab,
@@ -649,7 +662,7 @@ class ClusterFitPlot:
 ###############################################################################
 @dataclass
 class ClusterFitPerformancePlot: 
-    __clusterfitperf__: Any='Should be the parent class'
+    __clusterfitperf__: ClusterFitPerformance
 
     def __post_init__(self): # Initialize the attributes
         self.__dict__.update(self.__clusterfitperf__.__dict__) # Import attr
@@ -693,25 +706,36 @@ class ClusterFitPerformancePlot:
         ax.set_yticks([])
 
         return(ax)
-
-#%%
-    
+       
 ###############################################################################
 # Example
 ###############################################################################
 if __name__ == '__main__':    
     from sklearn.datasets import make_regression     # Generate example data
-    X, y = make_regression(n_samples=200, n_features=20,
+    X, y = make_regression(n_samples=50, n_features=20,
                            noise=4, random_state=42)
     df = pd.DataFrame(X, columns=[f'x{idx+1}' for idx in range(X.shape[1])])
+    df['label'] = [random_text(3) for _ in range(len(df))] # Add a label
+    df = df.set_index('label')
 
-    # # Fit the model    
-    # lreg = LogisticRegression('yp', ['intercept', 'x1', 'x2'], df).fit() 
-    # print(lreg.predict(cond_vector)) # Predictions
-
-    #            yp     lower     upper
-    # 199  0.517033  0.417246  0.61547
-
+    # Prepare the cluster
     clu = Cluster(df.columns, df)
 
+    # Plot the dendogram
+    fig, ax = plt.subplots()
+    clu.dendogram(axvline=9, ax=ax)
+    plt.show()
 
+    # Fit the Kmeans
+    clu_f = clu.fit(method='kmeans', n_clusters=5)
+
+    # Plot on the projection on a 2D subspace with labels
+    fig, ax = plt.subplots()
+    clu_f.plot.cluster_2d(style='labels', ax=ax)
+    plt.show()
+
+    # Plot on the projection on a 2D subspace with centroids
+    fig, ax = plt.subplots()
+    clu_f.plot.cluster_2d(style='centroids', ax=ax)
+    plt.show()
+    
