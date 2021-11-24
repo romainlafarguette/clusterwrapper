@@ -2,10 +2,10 @@
 """
 Wrapper Class to Cluster Data and to Generate Output
 Romain Lafarguette, https://romainlafarguette.github.io/
-Time-stamp: "2021-11-19 13:22:06 RLafarguette"
+Time-stamp: "2021-11-23 20:01:04 RLafarguette"
 """
 ###############################################################################
-#%% Modules
+# Modules
 ###############################################################################
 # Base
 import pandas as pd
@@ -37,20 +37,20 @@ import matplotlib.pyplot as plt
 import seaborn as sns; sns.set(style="white", font_scale=2)
 
 ###############################################################################
-#%% Parameters
+# Parameters
 ###############################################################################
 # I have problems with resetting iterators (cyclers) for consistent style
 # Hence I just create long lists...
 line_l = ['solid', 'dotted', 'dashed', 'dashdot', 'densely dashdotted',
           'loosely dashdotdotted']*15
 
-color_l = ['tab:blue', 'tab:red', 'tab:green', 'tab:brown', 'tab:purple',
-           'tab:orange', 'tab:pink']*15
+color_l = ['tab:blue', 'tab:red', 'tab:green', 'tab:orange', 'tab:brown',
+           'tab:purple', 'tab:pink']*15
 
 marker_l = ['o', 'v', 's', 'D', 'p', 'P', 'h', '*']*15
 
 ###############################################################################
-#%% Ancillary functions
+# Ancillary functions
 ###############################################################################
 def scale_wd(df, mean_d, std_d):
     """ Standard Scaler with Dictionaries (to rescale easily) """
@@ -82,16 +82,6 @@ def unscale_wd(df, mean_d, std_d):
     for var in df.columns:
         duscale[var] = (df[var]*std_d[var]) + mean_d[var]
     return(duscale)
-
-def lab_reo(labels_l):    
-    """ Reorder labels by frequency and add 1"""    
-    cd = Counter(labels_l) # Frequency
-    sc = OrderedDict(sorted(cd.items(), key=lambda kv: kv[1], reverse=True))
-
-    change_d = {old:new for new, old in enumerate(sc.keys())}
-    new_labels_l = [change_d[lab] + 1 for lab in labels_l]
-
-    return(new_labels_l)
 
 def plot_dendrogram(model, **kwargs):
     # Create linkage matrix and then plot the dendrogram
@@ -140,8 +130,7 @@ class Cluster: # Define the master cluster class
         self.pca_fit = PCA(n_components=2).fit(self.x) # PCA Fit
         self.dpca = pd.DataFrame(scale(self.pca_fit.transform(self.x)),
                                  columns=['first_comp', 'second_comp'],
-                                 index=self.dfg.index)
-
+                                 index=self.dfg.index)                
         # Unit tests
         self.__cluster_unit_test__() # UnitTests defined below
         
@@ -201,13 +190,16 @@ class ClusterFit:
     def __post_init__(self): # Post-initialize the attributes
         self.__dict__.update(self.__cluster__.__dict__) # Import attributes
         self.cluster_fit, self.centroids = self.__fit()
-        self.cluster_fit.labels_ = lab_reo(self.cluster_fit.labels_) # Reorder 
-        self.dfr, self.dfr_x = self.__res_frame__()
-        self.labels = self.dfr_x['cluster_label'].copy().values
+        self.cluster_d = {label:cluster+1 for label, cluster in
+                          zip(self.dfg.index, self.cluster_fit.labels_)}
+        self.labels = [x+1 for x in self.cluster_fit.labels_]
+        self.dfcluster, self.dfcluster_x = self.__res_frame__()
         self.dcentroids, self.dcentroids_unscaled = self.__dcentroids_f__() 
+        self.dpca, self.dpca_centroids = self.__pca_fit__()
         
         # Some useful features saved in a dictionary
-        self.color_d = self.__color_d_generator__()
+        self.color_d = {clust: color_l[idx]
+                        for idx, clust in enumerate(sorted(set(self.labels)))}
         
         # Class variables: defined as attributes (not as methods)
         self.perf = ClusterFitPerformance(__clusterfitp__=self)
@@ -238,35 +230,46 @@ class ClusterFit:
         
     def __res_frame__(self): # Package the results in the frame
         # Get the labels
-        labels = np.reshape(self.cluster_fit.labels_, self.x.shape[0])        
+        labels = [self.cluster_d[idx] for idx in self.dfg.index]
         
         # Create a new dataframe with the labels : unscaled
-        dfr = self.dfg.copy() # Note that dfg is unscaled (not as self.x)
-        dfr.insert(0, 'cluster_label', labels) # Add the column first
+        dfcluster = self.dfg.copy() # Note that dfg is unscaled (not as self.x)
+        dfcluster.insert(0, 'cluster', labels) # Add the column first
         
         # Create a new dataframe with the labels : scaled
-        dfr_x = pd.DataFrame(self.x)        
-        dfr_x.columns = self.features_l
-        dfr_x.insert(0, 'cluster_label', labels) # Add the column first    
-        return((dfr, dfr_x))
-       
+        dfcluster_x = pd.DataFrame(self.x)        
+        dfcluster_x.columns = self.features_l
+        dfcluster_x.insert(0, 'cluster', labels) # Add the column first    
+        return((dfcluster, dfcluster_x))
+
+    def __pca_fit__(self):        
+        """ Cluster estimation on the PCA frame """
+        dp = self.dpca.copy()
+        dp['cluster'] = [self.cluster_d[label]
+                         for label in self.dpca.index]
+               
+        # Compute the centroids 
+        vi_l = ['first_comp', 'second_comp']
+        x_pca = dp[vi_l].values
+        y_pca = dp['cluster'].values # Predict the clusters
+        cent_fit = NearestCentroid().fit(x_pca, y_pca)
+        dp_cent = pd.DataFrame(cent_fit.centroids_, index=cent_fit.classes_,
+                            columns=vi_l)        
+        dp_cent.insert(0, 'cluster', dp_cent.index)
+
+        return((dp, dp_cent)) # PCA frame and PCA centroids
+    
     def __features_labels__(self, stat='mean'): # Summarize features by label
         # Summarize the features by label
         if stat=='mean':    
-            dsum = self.dfr.groupby('cluster_label')[
+            dsum = self.dfcluster.groupby('cluster')[
                 self.features_l].mean().copy()
         elif stat=='median':
-            dsum = self.dfr.groupby('cluster_label')[
+            dsum = self.dfcluster.groupby('cluster')[
                 self.features_l].median().copy()
         else:
             raise ValueError('stat should be in (mean, median)')
         return(dsum)
-
-    def __color_d_generator__(self):
-        color_d = dict()
-        for i in self.cluster_fit.labels_:            
-            color_d[i] = color_l[i-1] # Because the labels start at 1
-        return(color_d)
 
     def __dcentroids_f__(self):
         """ 
@@ -275,31 +278,33 @@ class ClusterFit:
         I also recompute them on uncentered variables via unscaling
         """
                 
-        # Scaled        
-        centroids = NearestCentroid().fit(self.x, self.labels).centroids_
+        # Scaled
+        labels_l = [self.cluster_d[idx] for idx in self.dfg.index]
+        centroids = NearestCentroid().fit(self.x, labels_l).centroids_
         dc = pd.DataFrame(centroids, columns=self.features_l).copy()
         
         # Unscaled centroids
         du = unscale_wd(df=dc, mean_d=self.mean_d, std_d=self.std_d)
 
-        unq_labels = sorted(set(self.labels))
-        dc.insert(0, 'cluster_label', unq_labels) 
-        du.insert(0, 'cluster_label', unq_labels) 
+        ### TO CHECK
+        unq_labels = sorted(set(labels_l))
+        dc.insert(0, 'cluster', unq_labels) 
+        du.insert(0, 'cluster', unq_labels) 
         
         # In case I want to make sure the centroids are well positionned
         # But by default is ok, and time consuming...
         # # Identify the centroids with the minimum distance within a group
         # for idx in dc.index: # For each centroid
         #     dist_d = dict()
-        #     for lab in sorted(set(self.dfr_x.cluster_label)): # each label
+        #     for lab in sorted(set(self.dfcluster_x.cluster)): # each label
         #         cent = dc.loc[[idx], self.features_l].copy().values
-        #         cond = (self.dfr_x.cluster_label==lab) # Given cluster
-        #         group = self.dfr_x.loc[cond, self.features_l].copy().values
+        #         cond = (self.dfcluster_x.cluster==lab) # Given cluster
+        #         group = self.dfcluster_x.loc[cond, self.features_l].copy().values
         #         dist = cdist(group, cent, 'euclidean') # Dist to centroids
         #         dist_d[lab] = np.median(dist) # distance within each group
 
         #     o_lab = int(min(dist_d, key=dist_d.get)) # Minimum distance   
-        #     dc.iloc[idx, dc.columns.get_loc('cluster_label')] = o_lab    
+        #     dc.iloc[idx, dc.columns.get_loc('cluster')] = o_lab    
         
         return((dc, du))
     
@@ -335,7 +340,7 @@ class ClusterFitPerformance:
         
     def __silhouette_frame__(self):
         """ Compute the silhouette values and store in a frame """
-        dsilh = self.dfr_x.copy()
+        dsilh = self.dfcluster_x.copy()
         
         # Compute the average silhouette scores 
         _silhouette_avg = silhouette_score(self.x, self.labels)
@@ -479,13 +484,13 @@ class ClusterFitPlot:
         
     def cluster_size(self, ax=None, **kwargs):
         var = self.features_l[0] # take the first variable
-        df = self.dfr.copy()
-        dcount = df.groupby('cluster_label', as_index=False)[var].count()
+        df = self.dfcluster.copy()
+        dcount = df.groupby('cluster', as_index=False)[var].count()
         dcount = dcount.rename(columns={var:'count'})
-        dcount['color'] = [self.color_d[x] for x in dcount['cluster_label']]
+        dcount['color'] = [self.color_d[x] for x in dcount['cluster']]
     
         ax = ax or plt.gca() # If None returns the other choice   
-        ax.bar(dcount['cluster_label'], dcount['count'], color=dcount['color'])
+        ax.bar(dcount['cluster'], dcount['count'], color=dcount['color'])
         ax.set_xlabel('Cluster ID', labelpad=20, fontsize='small')
         ax.set_ylabel('Number of individuals', labelpad=20, fontsize='small')
         ax.set_title('Number of individuals by cluster', y=1.02)
@@ -494,28 +499,35 @@ class ClusterFitPlot:
         return(ax) # Return just the ax
 
     def single_feature_by_cluster(self, feature=None,
-                                  label=None, stat='mean',
+                                  title=None, stat='mean',
                                   ax=None, **kwargs):
 
         # Because the default value is contained in self, need to manage here
         feature = feature or self.features_l[0]
-        label = label or self.features_l[0]
+        title = title or self.features_l[0]
         
         # Retrieve the summary statistics (very fast)
-        dsum = self.__clusterfit__.__features_labels__(stat=stat)
+        dsum = self.__clusterfit__.__features_labels__(stat=stat).copy()
         dsum['color'] = [self.color_d[x] for x in dsum.index]
-                        
+        dsum['cluster'] = dsum.index
+    
         # Prepare the chart
         ax = ax or plt.gca() # If None returns the other choice
-        
-        ax.bar(dsum.index, dsum[feature], label=label, color=dsum['color'])
+        clrs = [self.color_d[x] for x in dsum.index]
+        p = sns.barplot(x=dsum.index, y=feature, data=dsum, hue='cluster',
+                         palette=clrs, ax=ax)
+            
         ax.axhline(y=0, color='black')
 
-        ax.legend(frameon=False, handlelength=1, fontsize='small')
+        ax.legend(frameon=False, handlelength=1, fontsize='small',
+                  ncol=2, title='Cluster')
         
-        ax.set_xticks(dsum.index)
+        #ax.set_xticks(dsum.index)
         ax.tick_params(axis='both', labelsize='small')
-                
+
+        ax.set_xlabel('', labelpad=20)
+        ax.set_ylabel(feature, labelpad=20)
+        ax.set_title(title, y=1.02)        
         return(ax) # Return the whole figure
     
     def all_features_by_cluster(self, stat='mean', ncols=3):
@@ -548,11 +560,10 @@ class ClusterFitPlot:
         plt.subplots_adjust(wspace=0.3, hspace=0.3)    
         return(axs) # Return the whole figure
 
-
     def all_features_by_centroid(self, ncols=3):
         # Retrieve the unscaled centroid frame
         dcent = self.dcentroids_unscaled.copy()
-        dcent['color'] = [self.color_d[x] for x in dcent.cluster_label]
+        dcent['color'] = [self.color_d[x] for x in dcent.cluster]
         
         # Determine the chart
         nplots = len(self.features_l)
@@ -570,10 +581,10 @@ class ClusterFitPlot:
 
         for idx, var in enumerate(self.features_l):
             ax = ax_l[idx]
-            ax.bar(dcent.cluster_label, dcent[var], color=dcent['color'])
+            ax.bar(dcent.cluster, dcent[var], color=dcent['color'])
             ax.axhline(y=0, color='black')
             ax.set_title(var, fontsize='small')
-            ax.set_xticks(dcent.cluster_label)
+            ax.set_xticks(dcent.cluster)
             ax.tick_params(axis='both', labelsize='x-small')
 
         plt.subplots_adjust(wspace=0.3, hspace=0.3)    
@@ -583,44 +594,28 @@ class ClusterFitPlot:
     def cluster_2d(self, style='centroids', axis_label=True,
                    ax=None, **kwargs):
         """ Present the clustering in a 2D space obtained through PCA """
-        
-        # Create the meshgrid
-        dp = self.dpca.copy()
-        
-        # Obtain labels for PCA and each point 
-        pca_labels_org = self.cluster_fit.fit_predict(dp.values)
-        dp['labels'] = lab_reo(pca_labels_org) # Reorder them    
 
-        # Compute the centroids as averaged 
-        vi_l = ['first_comp', 'second_comp']
-        x_pca = dp[vi_l].values
-        y_pca = dp['labels'].values
-        u_labels = sorted(set(dp['labels']))
-        pca_cent = NearestCentroid().fit(x_pca, y_pca).centroids_
-        dpcc = pd.DataFrame(pca_cent, index=u_labels, columns=vi_l)
-        dpcc.insert(0, 'labels', dpcc.index)
+        dp = self.dpca.copy()
+        dpcc = self.dpca_centroids.copy()
         
         # Generate the plot
         ax = ax or plt.subplot(1, 1, 1) # If None returns the other choice
         
-        for idx, lab in enumerate(sorted(dp['labels'].unique())):
-            dpl = dp.loc[dp.labels==lab, :].copy()
-            dcl = dpcc.loc[dpcc.labels==lab, :].copy()
-            fcolor = self.color_d[lab]
+        for idx, clust in enumerate(dpcc['cluster']):
+            dpl = dp.loc[dp.cluster==clust, :].copy()
+            dcl = dpcc.loc[dpcc.cluster==clust, :].copy()
+            fcolor = self.color_d[clust]
             fmarker = marker_l[idx]
             if style=='centroids':
                 # Points
-                ax.scatter(dpl['first_comp'], dpl['second_comp'], s=0)
-                for x, y, txt in zip(dpl['first_comp'], dpl['second_comp'],
-                                     dpl.index):
-                    ax.text(x, y, txt, fontsize='x-small', color=fcolor)
-                
-                # ax.scatter(dpl['first_comp'], dpl['second_comp'],
-                #            color=fcolor, marker=fmarker, s=75)
+                ax.scatter(dpl['first_comp'], dpl['second_comp'],
+                           c=fcolor, marker=marker_l[idx], s=100)
+
                 # Centroids
                 ax.scatter(dcl['first_comp'], dcl['second_comp'],
-                           c=fcolor, marker='X', s=125)
-                
+                           c=fcolor, marker=marker_l[idx], s=200,
+                           label=f'Cluster {int(clust)}')
+
                 # Plot the lines to the centroids
                 for idx in range(len(dpl)):                
                     val_x = float(dpl.iloc[idx, :]['first_comp'])
@@ -628,7 +623,8 @@ class ClusterFitPlot:
                     val_y = float(dpl.iloc[idx, :]['second_comp'])
                     c_y = float(dcl['second_comp'])                           
                     ax.plot([val_x, c_x], [val_y, c_y], c=fcolor, alpha=0.8)
-                    
+                ax.legend(frameon=False, ncol=2, fontsize='x-small')
+                                                
             elif style=='labels':
                 ax.scatter(dpl['first_comp'], dpl['second_comp'], s=0)
                 for x, y, txt in zip(dpl['first_comp'], dpl['second_comp'],
@@ -637,7 +633,7 @@ class ClusterFitPlot:
 
                 # Cluster number
                 ax.scatter(dcl['first_comp'], dcl['second_comp'],
-                           c='black', marker='$%d$' % lab,
+                           c='black', marker='$%d$' % clust,
                            s=250, edgecolor=fcolor)
                 
             else: # Take care of the error message
@@ -654,7 +650,14 @@ class ClusterFitPlot:
                           fontsize='small',labelpad=20)
         else:
             pass
-            
+
+        # Check if the clustering series match before returning the plot
+        cluster_pca = self.dpca.loc[self.dfcluster.index, 'cluster']    
+        cluster_all = self.dfcluster['cluster']
+        msg = ('ID Labels & Clusters misaligned between all features '
+               'clustering and PCA')
+        assert all(cluster_pca == cluster_all), msg
+
         return(ax) # Return only the ax
 
 ###############################################################################
@@ -672,25 +675,25 @@ class ClusterFitPerformancePlot:
 
         # Arrange the data for easy plot
         dp0 = self.__clusterfitperf__.__silhouette_frame__() 
-        dpg = dp0.groupby(['cluster_label'],
+        dpg = dp0.groupby(['cluster'],
                           as_index=False)['silhouette_val'].mean()
         dpg = dpg.rename(columns={'silhouette_val':'silhouette_avg_cluster'})
 
-        dp = dp0.merge(dpg, on=['cluster_label'])
+        dp = dp0.merge(dpg, on=['cluster'])
         dp = dp.sort_values(by=['silhouette_avg_cluster', 'silhouette_val'],
                             ascending=[False, False])
         dp = dp.reset_index()
 
         # Retrieve the parameters
         sil_avg = float(dp['silhouette_avg'].unique())
-        cluster_l = list(dp['cluster_label'].unique())
+        cluster_l = list(dp['cluster'].unique())
         len_cluster = len(cluster_l)
 
         # Prepare the chart
         ax = ax or plt.gca() # If None returns the other choice
 
         for cl in cluster_l:
-            dpl = dp.loc[dp.cluster_label==cl, :].copy()
+            dpl = dp.loc[dp.cluster==cl, :].copy()
             ax.plot(dpl['silhouette_val'], dpl.index, color=self.color_d[cl],
                     alpha=0.75)
             ax.fill_betweenx(dpl.index, 0, dpl['silhouette_val'],
@@ -728,14 +731,39 @@ if __name__ == '__main__':
 
     # Fit the Kmeans
     clu_f = clu.fit(method='kmeans', n_clusters=5)
+    
+    # Plot single feature
+    clu_f.plot.single_feature_by_cluster()
+    plt.show()
 
-    # Plot on the projection on a 2D subspace with labels
+    # Plot all features by cluster
+    fig, ax = plt.subplots()
+    clu_f.plot.all_features_by_cluster()
+    plt.subplots_adjust(wspace=0.3, hspace=0.4)
+    plt.show()
+
+    # Plot the projection on a 2D subspace with labels
     fig, ax = plt.subplots()
     clu_f.plot.cluster_2d(style='labels', ax=ax)
     plt.show()
 
-    # Plot on the projection on a 2D subspace with centroids
+    # Plot the projection on a 2D subspace with centroids
     fig, ax = plt.subplots()
     clu_f.plot.cluster_2d(style='centroids', ax=ax)
     plt.show()
+
+    # Retrieve the clustering frame on all features
+    print(clu_f.dfcluster)
+
+    # Retrieve the centroids on all features
+    print(clu_f.dcentroids)
     
+    # Retrieve the PCA frame with clusters and labels
+    print(clu_f.dpca)
+
+    # Retrieve the centroids of the PCA frame
+    print(clu_f.dpca_centroids)
+
+
+
+
